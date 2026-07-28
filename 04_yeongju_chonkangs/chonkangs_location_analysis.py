@@ -13,19 +13,22 @@
 
 [분석 흐름]
 1. 관광지·맛집·빈집·버스정류장·행정복지센터 데이터 전처리
-2. 동 단위로 묶여 있던 빈집 데이터를 면적 비율로 세부 지역에 재분배
-3. Google Maps Geocoding API로 주소를 위경도 좌표로 변환
-4. Folium으로 전체 데이터를 지도에 시각화
-5. 행정복지센터-관광지/맛집/정류장 간 거리 계산
-6. 인기도 점수 + 주거환경(빈집 등급) 점수 - 평균거리로 종합 점수 산출, 최종 입지 선정
+2. Google Maps Geocoding API로 주소를 위경도 좌표로 변환
+3. 하버사인 공식으로 행정복지센터-관광지/맛집 간 실거리 계산 및 점수화
+4. 빈집 등급별 점수 산정(MinMaxScaler 정규화)
+5. 관광지 점수 × 맛집 점수 × 빈집 등급 점수를 곱해 종합 점수 산출, 최종 입지 선정
+6. 최종 후보 읍면동 내에서 실제 인기 관광지·맛집 좌표 평균으로 세부 추천 지점까지 도출
 """
 
+import numpy as np
 import pandas as pd
 import googlemaps
 import folium
-from geopy.distance import geodesic
+from sklearn.preprocessing import MinMaxScaler
 
 GOOGLE_MAPS_API_KEY = "YOUR_API_KEY"  # 발급받은 API 키로 교체
+
+EMPTY_HOUSE_GRADE_SCORE = {"1등급": 50, "2등급": 40, "3등급": 25, "4등급": 10}
 
 
 # =========================================================
@@ -34,63 +37,43 @@ GOOGLE_MAPS_API_KEY = "YOUR_API_KEY"  # 발급받은 API 키로 교체
 def load_raw_data():
     tourist = pd.read_csv("center_tourist_spots.csv", encoding="cp949")
     restaurants = pd.read_csv("local_restaurants.csv", encoding="cp949")
-    empty_houses = pd.read_csv("empty_houses.csv", encoding="cp949")
-    bus_stops = pd.read_csv("bus_stops.csv", encoding="cp949")
+    empty_houses = pd.read_csv("empty_houses.csv")
     community_centers = pd.read_csv("community_centers.csv", encoding="cp949")
-    return tourist, restaurants, empty_houses, bus_stops, community_centers
+    return tourist, restaurants, empty_houses, community_centers
 
 
-def clean_data(tourist, restaurants, community_centers):
-    """분석에 불필요한 컬럼을 제거하고, 숙박업소는 경쟁시설이므로 관광지 목록에서 제외한다."""
-    tourist = tourist[tourist["중심카테고리"] != "숙박"].copy()
-    tourist = tourist.drop(["중심카테고리", "분류"], axis=1)
+def clean_data(tourist: pd.DataFrame, restaurants: pd.DataFrame, community_centers: pd.DataFrame):
+    """숙박시설(경쟁시설)은 관광지 목록에서 제외하고, 분석에 불필요한 컬럼을 정리한다."""
+    tourist = tourist[tourist["중심카테고리 명_대"] != "숙박"].copy()
+    tourist = tourist.drop(["중심카테고리 명_대", "분류"], axis=1, errors="ignore")
     tourist = tourist.rename(columns={"중심 POI X 좌표": "경도", "중심 POI Y 좌표": "위도"})
 
-    restaurants = restaurants.drop(["분류", "방문자수"], axis=1)
-    community_centers = community_centers.drop(["대표전화번호", "팩스번호", "데이터기준일자"], axis=1)
+    restaurants = restaurants.drop(["분류"], axis=1, errors="ignore")
+
+    community_centers = community_centers.drop(
+        ["대표전화번호", "팩스번호", "데이터기준일자"], axis=1, errors="ignore"
+    )
+    community_centers = community_centers[community_centers["기관명"] != "영주시청"]
 
     return tourist, restaurants, community_centers
 
 
-# =========================================================
-# 2. 빈집 데이터 면적 비율 재분배
-# =========================================================
-# 통계상 하나로 묶여 있던 동을 실제 세부 행정동 면적 비율로 나눔
-AREA_DATA = {
-    "가흥1동": 7.08, "가흥2동": 17.12,
-    "영주1동": 1.02, "영주2동": 0.49,
-    "휴천1동": 5.24, "휴천2동": 0.88, "휴천3동": 10.32,
-}
+def clean_empty_houses(df_empty_houses: pd.DataFrame) -> pd.DataFrame:
+    """헤더 정리, 총계 행 제거, 결측값('-')을 0으로 대체 후 정수형으로 변환한다."""
+    df = df_empty_houses.copy()
+    df.columns = df.iloc[0]
+    df = df.drop(df.index[0]).reset_index(drop=True)
+    df = df.drop(columns=["계"], errors="ignore")
+    df = df[df["읍면동"] != "총계"]  # 총계 행 제거
 
-
-def redistribute_empty_houses(df_empty_houses: pd.DataFrame) -> pd.DataFrame:
-    """가흥동/영주동/휴천동으로 묶여 있던 빈집 등급 데이터를 세부 동 면적 비율로 재분배한다."""
-    base_groups = {
-        "가흥": (df_empty_houses[df_empty_houses["읍면동"] == "가흥동"], 7.08 + 17.12),
-        "영주": (df_empty_houses[df_empty_houses["읍면동"] == "영주동"], 1.02 + 0.49),
-        "휴천": (df_empty_houses[df_empty_houses["읍면동"] == "휴천동"], 5.24 + 0.88 + 10.32),
-    }
-
-    grade_cols = ["계", "1등급", "2등급", "3등급", "4등급"]
-    df_new = pd.DataFrame()
-
-    for subregion, area in AREA_DATA.items():
-        prefix = next(p for p in base_groups if subregion.startswith(p))
-        df_base, base_area = base_groups[prefix]
-
-        ratio = area / base_area
-        df_sub = df_base.copy()
-        df_sub["읍면동"] = subregion
-        df_sub[grade_cols] = (df_sub[grade_cols] * ratio).astype(int)
-        df_new = pd.concat([df_new, df_sub])
-
-    df_result = df_empty_houses[~df_empty_houses["읍면동"].isin(["가흥동", "영주동", "휴천동"])]
-    df_result = pd.concat([df_result, df_new], ignore_index=True)
-    return df_result
+    df.replace("-", 0, inplace=True)
+    grade_cols = ["1등급", "2등급", "3등급", "4등급"]
+    df[grade_cols] = df[grade_cols].astype(int)
+    return df
 
 
 # =========================================================
-# 3. 지오코딩 (주소 → 위경도)
+# 2. 지오코딩 (주소 → 위경도)
 # =========================================================
 def geocode_address(gmaps_client: googlemaps.Client, address: str):
     try:
@@ -113,9 +96,106 @@ def add_coordinates(df: pd.DataFrame, address_column: str, gmaps_client: googlem
 
 
 # =========================================================
-# 4. 지도 시각화
+# 3. 거리 계산 (하버사인 공식 변형)
 # =========================================================
-def build_map(community_centers, tourist, restaurants, bus_stops, output_path="all_map.html"):
+def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """두 좌표 사이의 실제 거리(km)를 구면 삼각법(하버사인 공식)으로 계산한다."""
+    R = 6371  # 지구 반지름(km)
+    dlat = np.radians(lat2 - lat1)
+    dlon = np.radians(lon2 - lon1)
+    a = np.sin(dlat / 2) ** 2 + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon / 2) ** 2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+    return R * c
+
+
+def calculate_proximity_score(center_row: pd.Series, target_df: pd.DataFrame) -> float:
+    """
+    행정복지센터 기준, 가장 가까운 대상 지점의 정규화 점수를 거리 가중치와 함께 반환한다.
+    거리가 가까울수록(min_distance가 작을수록) 점수가 높아지도록 설계했다.
+    """
+    lat1, lon1 = center_row["위도"], center_row["경도"]
+    max_distance, min_distance, min_normal = 0, float("inf"), 0
+
+    for _, row in target_df.iterrows():
+        distance = calculate_distance(lat1, lon1, row["위도"], row["경도"])
+        if distance < min_distance:
+            min_distance = distance
+            min_normal = row["정규"]
+        if distance > max_distance:
+            max_distance = distance
+
+    # 분모가 0이 되는 것을 방지하기 위해 +1
+    return (max_distance - min_distance) / (max_distance - min_distance + 1) * min_normal
+
+
+# =========================================================
+# 4. 점수 산출
+# =========================================================
+def score_tourist_and_restaurants(tourist: pd.DataFrame, restaurants: pd.DataFrame):
+    """관광지는 순위(인기도), 맛집은 방문객 수 기준으로 정규화 점수를 부여한다."""
+    scaler = MinMaxScaler()
+
+    # 맛집: 총 방문객 수 기준 정규화
+    restaurants = restaurants.copy()
+    restaurants["정규"] = scaler.fit_transform(restaurants[["총방문객수"]])
+
+    # 관광지: 순위가 높을수록(숫자가 작을수록) 높은 점수를 받도록 순위를 뒤집어 정규화
+    tourist = tourist.copy()
+    rank_length = len(tourist["순위"])
+    tourist["순위"] = list(range(rank_length, 0, -1))
+    tourist["정규"] = scaler.fit_transform(tourist[["순위"]])
+
+    return tourist, restaurants
+
+
+def score_empty_houses(df_empty_houses: pd.DataFrame, grades: list[str] = None) -> pd.DataFrame:
+    """
+    빈집 등급별 가중치를 곱해 총점을 구하고 정규화한다.
+    grades를 ["1등급", "2등급"]으로 좁히면 숙박 전환이 용이한 빈집만 대상으로 분석할 수 있다.
+    """
+    grades = grades or list(EMPTY_HOUSE_GRADE_SCORE.keys())
+    df = df_empty_houses.copy()
+
+    df["총점"] = df[grades].apply(
+        lambda row: sum(row[g] * EMPTY_HOUSE_GRADE_SCORE[g] for g in grades), axis=1
+    )
+
+    scaler = MinMaxScaler()
+    df["E_S"] = scaler.fit_transform(df[["총점"]])
+    df.loc[df["총점"] == 0, "E_S"] = 0.00001  # 완전히 0으로 나오는 것 방지
+
+    return df.sort_values(by="E_S", ascending=False)
+
+
+def compute_final_ranking(community_centers, tourist, restaurants, empty_houses) -> pd.DataFrame:
+    """관광지 점수 × 맛집 점수 × 빈집 등급 점수를 곱해 종합 점수를 산출하고 정규화한다."""
+    community_centers = community_centers.copy()
+    community_centers["Score_Tourist"] = community_centers.apply(
+        calculate_proximity_score, axis=1, target_df=tourist
+    )
+    community_centers["Score_Restaurant"] = community_centers.apply(
+        calculate_proximity_score, axis=1, target_df=restaurants
+    )
+    community_centers["Final_Score"] = (
+        community_centers["Score_Tourist"] * community_centers["Score_Restaurant"]
+    )
+
+    merged = community_centers.sort_values("기관명").reset_index(drop=True)
+    empty_houses_sorted = empty_houses.sort_values("읍면동").reset_index(drop=True)
+    merged = pd.concat([merged, empty_houses_sorted], axis=1)
+
+    merged["Final_Score"] = round(merged["Final_Score"] * merged["E_S"], 6)
+
+    scaler = MinMaxScaler()
+    merged["종합점수_정규화"] = scaler.fit_transform(merged[["Final_Score"]])
+
+    return merged.sort_values("Final_Score", ascending=False)
+
+
+# =========================================================
+# 5. 지도 시각화
+# =========================================================
+def build_map(community_centers, tourist, restaurants, output_path="all_map.html"):
     m = folium.Map(location=[36.8065, 128.6270], zoom_start=13)  # 영주시 중심 좌표
 
     for _, row in community_centers.iterrows():
@@ -124,106 +204,56 @@ def build_map(community_centers, tourist, restaurants, bus_stops, output_path="a
         folium.Marker([row["위도"], row["경도"]], popup=row["관광지명"], icon=folium.Icon(color="green")).add_to(m)
     for _, row in restaurants.iterrows():
         folium.Marker([row["위도"], row["경도"]], popup=row["업소명"], icon=folium.Icon(color="orange")).add_to(m)
-    for _, row in bus_stops.iterrows():
-        folium.Marker([row["위도"], row["경도"]], popup=row["정류장명"], icon=folium.Icon(color="red")).add_to(m)
 
     m.save(output_path)
     print("지도 저장 완료:", output_path)
 
 
-# =========================================================
-# 5. 거리 계산
-# =========================================================
-def calculate_distances(center_df: pd.DataFrame, spot_df: pd.DataFrame) -> dict:
-    """행정복지센터별로 대상 지점들까지의 거리(km) 목록을 계산한다."""
-    distances = {}
-    for _, center_row in center_df.iterrows():
-        center_coords = (center_row["위도"], center_row["경도"])
-        spot_distances = [
-            geodesic(center_coords, (spot_row["위도"], spot_row["경도"])).kilometers
-            for _, spot_row in spot_df.iterrows()
-        ]
-        distances[center_row["기관명"]] = spot_distances
-    return distances
-
-
-# =========================================================
-# 6. 종합 점수 계산 및 최종 입지 선정
-# =========================================================
-def calculate_popularity(spot_df: pd.DataFrame, center_df: pd.DataFrame) -> dict:
-    """가까운 거리에 순위가 높은(=인기 있는) 관광지·맛집이 많을수록 높은 점수를 부여한다."""
-    scores = {}
-    for _, center_row in center_df.iterrows():
-        center_coords = (center_row["위도"], center_row["경도"])
-        total_score = 0
-        for _, spot_row in spot_df.iterrows():
-            distance = geodesic(center_coords, (spot_row["위도"], spot_row["경도"])).kilometers
-            total_score += 1 / (distance + 0.1) * spot_row["순위"]
-        scores[center_row["기관명"]] = total_score
-    return scores
-
-
-def assign_environment_scores(df_empty_houses: pd.DataFrame) -> dict:
-    """숙박업 전환이 용이한 1~2등급 빈집에 더 높은 가중치를 부여해 환경 점수를 계산한다."""
-    scores = {}
-    for _, row in df_empty_houses.iterrows():
-        score = row["1등급"] * 4 + row["2등급"] * 3 + row["3등급"] * 2 + row["4등급"] * 1
-        scores[row["읍면동"]] = score
-    return scores
-
-
-def rank_final_locations(
-    tourist_distances: dict, restaurant_distances: dict, bus_stop_distances: dict,
-    popularity_scores: dict, environment_scores: dict, top_n: int = 10,
-) -> list[tuple[str, float]]:
+def find_optimal_point(tourist: pd.DataFrame, restaurants: pd.DataFrame, tourist_names: list[str], restaurant_names: list[str]):
     """
-    종합 점수 = 인기도 점수 + 주거환경 점수 - 평균 거리
-    (관광지·맛집이 가깝고 인기 있을수록, 빈집 활용 가치가 높을수록 높은 점수)
+    최종 선정된 읍면동 내에서, 실제 인기 있는 관광지·맛집 좌표의 평균을 구해
+    '면 안에서 가장 적절한 지점'을 한 단계 더 구체화한다.
     """
-    combined_scores = {}
-    for center, tourist_dist in tourist_distances.items():
-        restaurant_dist = restaurant_distances[center]
-        bus_stop_dist = bus_stop_distances[center]
-        all_distances = tourist_dist + restaurant_dist + bus_stop_dist
-        avg_distance = sum(all_distances) / len(all_distances)
+    selected_tourist = tourist[tourist["관광지명"].isin(tourist_names)]
+    selected_restaurants = restaurants[restaurants["업소명"].isin(restaurant_names)]
 
-        combined_scores[center] = (
-            popularity_scores[center] + environment_scores.get(center, 0) - avg_distance
-        )
+    total_lat = selected_tourist["위도"].sum() + selected_restaurants["위도"].sum()
+    total_lon = selected_tourist["경도"].sum() + selected_restaurants["경도"].sum()
+    count = len(selected_tourist) + len(selected_restaurants)
 
-    return sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    return total_lat / count, total_lon / count
 
 
 # =========================================================
 # 실행부
 # =========================================================
 if __name__ == "__main__":
-    tourist, restaurants, empty_houses, bus_stops, community_centers = load_raw_data()
+    tourist, restaurants, empty_houses, community_centers = load_raw_data()
     tourist, restaurants, community_centers = clean_data(tourist, restaurants, community_centers)
-    empty_houses = redistribute_empty_houses(empty_houses)
+    empty_houses = clean_empty_houses(empty_houses)
 
     gmaps_client = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
     restaurants = add_coordinates(restaurants, "주소", gmaps_client)
     community_centers = add_coordinates(community_centers, "소재지 도로명주소", gmaps_client)
 
-    build_map(community_centers, tourist, restaurants, bus_stops)
+    tourist, restaurants = score_tourist_and_restaurants(tourist, restaurants)
 
-    tourist_distances = calculate_distances(community_centers, tourist)
-    restaurant_distances = calculate_distances(community_centers, restaurants)
-    bus_stop_distances = calculate_distances(community_centers, bus_stops)
+    # 1~2등급 빈집만 사용 (숙박 전환이 용이한 등급)
+    empty_houses_12 = score_empty_houses(empty_houses, grades=["1등급", "2등급"])
 
-    popularity_scores = calculate_popularity(tourist, community_centers)
-    environment_scores = assign_environment_scores(empty_houses)
+    final_ranking = compute_final_ranking(community_centers, tourist, restaurants, empty_houses_12)
 
-    final_ranking = rank_final_locations(
-        tourist_distances, restaurant_distances, bus_stop_distances,
-        popularity_scores, environment_scores,
+    print("최종 입지 순위 (종합 점수 기준):")
+    print(final_ranking[["기관명", "Final_Score", "종합점수_정규화"]].head(10))
+
+    build_map(community_centers, tourist, restaurants)
+
+    # 최종 선정 지역(예: 문수면) 내 세부 추천 지점 계산 예시
+    lat, lon = find_optimal_point(
+        tourist, restaurants,
+        tourist_names=["천지인전통사상체험관", "무섬외나무다리", "무섬외나무다리축제", "무섬마을한옥체험관"],
+        restaurant_names=["사느레정원", "카페월호", "무섬식당"],
     )
+    print(f"문수면 내 세부 추천 지점: 위도 {lat:.6f}, 경도 {lon:.6f}")
 
-    print("최종 입지 순위 (상위 10개 행정복지센터 기준):")
-    for i, (center, score) in enumerate(final_ranking, start=1):
-        print(f"{i}. {center}: {score:.2f}")
-
-    pd.DataFrame(final_ranking, columns=["센터명", "종합 점수"]).to_csv(
-        "top_10_centers.csv", index=False, encoding="cp949"
-    )
+    final_ranking.to_csv("final_ranking.csv", index=False, encoding="cp949")
