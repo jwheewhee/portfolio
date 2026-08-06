@@ -12,23 +12,36 @@
 행정복지센터 위치를 해당 지역 빈집의 대표 좌표로 삼는 방식을 사용했습니다.
 
 [분석 흐름]
-1. 관광지·맛집·빈집·버스정류장·행정복지센터 데이터 전처리
+1. 관광지·맛집·빈집·행정복지센터 데이터 전처리
 2. Google Maps Geocoding API로 주소를 위경도 좌표로 변환
 3. 하버사인 공식으로 행정복지센터-관광지/맛집 간 실거리 계산 및 점수화
-4. 빈집 등급별 점수 산정(MinMaxScaler 정규화)
+4. 빈집 등급별 점수 산정(1~2등급만 대상, MinMaxScaler 정규화)
+   - 3~4등급은 철거 대상이라 숙박 전환이 불가능해 분석에서 제외
 5. 관광지 점수 × 맛집 점수 × 빈집 등급 점수를 곱해 종합 점수 산출, 최종 입지 선정
 6. 최종 후보 읍면동 내에서 실제 인기 관광지·맛집 좌표 평균으로 세부 추천 지점까지 도출
+7. 최종 후보 3곳(문수면·순흥면·부석면)의 행정경계(GeoJSON)와 순위 마커로 결과 지도 시각화
 """
+
+import json
 
 import numpy as np
 import pandas as pd
 import googlemaps
 import folium
+import requests
 from sklearn.preprocessing import MinMaxScaler
 
 GOOGLE_MAPS_API_KEY = "YOUR_API_KEY"  # 발급받은 API 키로 교체
 
 EMPTY_HOUSE_GRADE_SCORE = {"1등급": 50, "2등급": 40, "3등급": 25, "4등급": 10}
+
+# 행정구역 경계 GeoJSON (전국 읍면동 단위)
+ADMIN_BOUNDARY_URL = (
+    "https://raw.githubusercontent.com/southkorea/southkorea-maps/master/"
+    "kostat/2013/json/skorea_submunicipalities_geo_simple.json"
+)
+# '부석면'은 전국에 동명 지역이 여러 곳 있어, 영주시 부석면의 행정코드까지 함께 확인해야 한다.
+YEONGJU_BUSEOK_CODE = "3706039"
 
 
 # =========================================================
@@ -152,6 +165,7 @@ def score_empty_houses(df_empty_houses: pd.DataFrame, grades: list[str] = None) 
     """
     빈집 등급별 가중치를 곱해 총점을 구하고 정규화한다.
     grades를 ["1등급", "2등급"]으로 좁히면 숙박 전환이 용이한 빈집만 대상으로 분석할 수 있다.
+    실제 최종 분석에서는 3~4등급(철거 대상)을 제외하고 1~2등급만 사용했다.
     """
     grades = grades or list(EMPTY_HOUSE_GRADE_SCORE.keys())
     df = df_empty_houses.copy()
@@ -196,6 +210,7 @@ def compute_final_ranking(community_centers, tourist, restaurants, empty_houses)
 # 5. 지도 시각화
 # =========================================================
 def build_map(community_centers, tourist, restaurants, output_path="all_map.html"):
+    """분석 과정에서 전체 후보지·관광지·맛집 위치를 훑어보는 탐색용 지도."""
     m = folium.Map(location=[36.8065, 128.6270], zoom_start=13)  # 영주시 중심 좌표
 
     for _, row in community_centers.iterrows():
@@ -206,7 +221,7 @@ def build_map(community_centers, tourist, restaurants, output_path="all_map.html
         folium.Marker([row["위도"], row["경도"]], popup=row["업소명"], icon=folium.Icon(color="orange")).add_to(m)
 
     m.save(output_path)
-    print("지도 저장 완료:", output_path)
+    print("탐색용 지도 저장 완료:", output_path)
 
 
 def find_optimal_point(tourist: pd.DataFrame, restaurants: pd.DataFrame, tourist_names: list[str], restaurant_names: list[str]):
@@ -224,6 +239,50 @@ def find_optimal_point(tourist: pd.DataFrame, restaurants: pd.DataFrame, tourist
     return total_lat / count, total_lon / count
 
 
+def load_administrative_boundaries():
+    """
+    전국 읍면동 행정경계 GeoJSON을 내려받아, 최종 후보 3개 읍면동(문수면·순흥면·부석면)의
+    경계만 추출한다. '부석면'은 전국에 동명 지역이 여러 곳 있어, 이름만으로 필터링하면
+    다른 지역의 부석면이 섞여 들어올 수 있다. 그래서 영주시 부석면의 행정코드까지 함께 확인한다.
+    """
+    data = requests.get(ADMIN_BOUNDARY_URL).json()
+
+    target_names = ["문수면", "순흥면"]
+    boundaries = []
+    for feature in data["features"]:
+        name = feature["properties"]["name"]
+        if name in target_names:
+            boundaries.append(feature)
+        elif name == "부석면" and feature["properties"]["code"] == YEONGJU_BUSEOK_CODE:
+            boundaries.append(feature)
+    return boundaries
+
+
+def build_final_result_map(boundaries: list, ranked_points: dict, output_path="final_map.html"):
+    """
+    최종 후보 3곳의 행정경계와 순위 마커를 하나의 지도에 시각화한다.
+
+    ranked_points 예시:
+        {"1위": (위도, 경도, "문수면"), "2위": (위도, 경도, "순흥면"), "3위": (위도, 경도, "부석면")}
+    """
+    m = folium.Map(location=[36.8057, 128.6241], zoom_start=11)
+
+    for feature in boundaries:
+        folium.GeoJson(feature, name=feature["properties"]["name"]).add_to(m)
+
+    icon_colors = {"1위": "green", "2위": "blue", "3위": "orange"}
+    for rank, (lat, lon, region_name) in ranked_points.items():
+        folium.Marker(
+            location=[lat, lon],
+            popup=f"영주시 적정 빈 집 {rank}: {region_name}",
+            icon=folium.Icon(color=icon_colors.get(rank, "gray")),
+        ).add_to(m)
+
+    folium.LayerControl().add_to(m)
+    m.save(output_path)
+    print("최종 결과 지도 저장 완료:", output_path)
+
+
 # =========================================================
 # 실행부
 # =========================================================
@@ -238,7 +297,7 @@ if __name__ == "__main__":
 
     tourist, restaurants = score_tourist_and_restaurants(tourist, restaurants)
 
-    # 1~2등급 빈집만 사용 (숙박 전환이 용이한 등급)
+    # 1~2등급 빈집만 사용 (숙박 전환이 용이한 등급, 3~4등급은 철거 대상이라 제외)
     empty_houses_12 = score_empty_houses(empty_houses, grades=["1등급", "2등급"])
 
     final_ranking = compute_final_ranking(community_centers, tourist, restaurants, empty_houses_12)
@@ -248,12 +307,35 @@ if __name__ == "__main__":
 
     build_map(community_centers, tourist, restaurants)
 
-    # 최종 선정 지역(예: 문수면) 내 세부 추천 지점 계산 예시
-    lat, lon = find_optimal_point(
+    # 최종 선정 3개 지역(문수면·순흥면·부석면) 내 세부 추천 지점 계산
+    lat_ms, lon_ms = find_optimal_point(
         tourist, restaurants,
         tourist_names=["천지인전통사상체험관", "무섬외나무다리", "무섬외나무다리축제", "무섬마을한옥체험관"],
         restaurant_names=["사느레정원", "카페월호", "무섬식당"],
     )
-    print(f"문수면 내 세부 추천 지점: 위도 {lat:.6f}, 경도 {lon:.6f}")
+    lat_sh, lon_sh = find_optimal_point(
+        tourist, restaurants,
+        tourist_names=["초암사", "죽계구곡", "여우생태관찰원", "국민체육진흥공단경륜훈련원", "소수서원", "영주선비촌", "선비세상"],
+        restaurant_names=["선비촌종가집", "연화떡카페", "순흥기지떡순흥본점", "순흥전통묵집"],
+    )
+    lat_bs, lon_bs = find_optimal_point(
+        tourist, restaurants,
+        tourist_names=["콩세계과학관", "영주사과축제", "부석사무량수전"],
+        restaurant_names=["자미가", "랜드컴포트커피스토어", "일월식당[중식]"],
+    )
+    print(f"문수면 내 세부 추천 지점: 위도 {lat_ms:.6f}, 경도 {lon_ms:.6f}")
+    print(f"순흥면 내 세부 추천 지점: 위도 {lat_sh:.6f}, 경도 {lon_sh:.6f}")
+    print(f"부석면 내 세부 추천 지점: 위도 {lat_bs:.6f}, 경도 {lon_bs:.6f}")
+
+    # 최종 결과 지도(행정경계 + 순위 마커) 시각화 - 종합 점수 기준 1위 문수면, 2위 순흥면, 3위 부석면
+    boundaries = load_administrative_boundaries()
+    build_final_result_map(
+        boundaries,
+        ranked_points={
+            "1위": (lat_ms, lon_ms, "문수면"),
+            "2위": (lat_sh, lon_sh, "순흥면"),
+            "3위": (lat_bs, lon_bs, "부석면"),
+        },
+    )
 
     final_ranking.to_csv("final_ranking.csv", index=False, encoding="cp949")
