@@ -1,4 +1,4 @@
-# 💡 LG ThinQ 메이트 — LG전자 DX School BX 프로젝트 (우수상, 2위)
+# 💡 LG ThinQ 메이트 - LG전자 DX School BX 프로젝트 (우수상, 2위)
 
 LG ThinQ의 낮은 재방문율 문제를 데이터로 입증하고, 중장년층 고객의 정서적 니즈까지 결합한
 커뮤니티형 솔루션 **'LG ThinQ 메이트'**를 기획한 프로젝트입니다.
