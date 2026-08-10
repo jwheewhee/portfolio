@@ -41,8 +41,12 @@ Kiwi 형태소 분석 후 TF-IDF로 벡터화하고, k=4~9 구간에서 실루�
 | 8 | **0.0468 (최고점)** |
 | 9 | 0.0462 |
 
+![k별 실루엣 지수](images/lilo_silhouette.png)
+
 지수상으로는 k=8(0.0468)이 최고점이었지만 군집이 과도하게 세분화되어
 해석이 어려워, 점수 차이가 크지 않은 구간(0.0441 vs 0.0468)에서 **k=6**을 최종 선택했습니다.
+
+![6개 Actor 군집 시각화](images/lilo_actor_clusters.png)
 
 도출된 6개 Actor:
 
@@ -95,7 +99,12 @@ Opportunity Score = Importance + max(Importance − Satisfaction, 0)
  ├─ 02_data_merging_preprocessing.py
  ├─ 03_actor_clustering.py
  ├─ 04_action_topic_modeling.py
- └─ 05_sentiment_opportunity_analysis.py
+ ├─ 05_sentiment_opportunity_analysis.py
+ ├─ data/
+ │   └─ README.md                          # 데이터 출처·컬럼 설명, KNU 감성사전 안내
+ └─ images/
+     ├─ lilo_silhouette.png                # k별 실루엣 지수 그래프
+     └─ lilo_actor_clusters.png            # 6개 Actor 군집 시각화
 ```
 
 ## ▶️ 실행 방법
