@@ -27,6 +27,9 @@ LG ThinQ의 낮은 재방문율 문제를 데이터로 입증하고, 중장년�
 - **목적**: "설치율은 높으나 실사용은 저조하다"는 핵심 난제의 원인을 정량적으로 파악
 - **방법**: Google Play Store에서 변화가 컸던 5.1.x 버전의 최근 1년치 리뷰를 하루 만에 **963건** 수집 → '안 된다', '어렵다' 등 형태소 변용까지 포착하는 의미 그룹 정규표현식으로 부정 키워드 비율 산출 → 저평점(1~3점) 리뷰 워드클라우드 시각화
 
+![82쿡 워드클라우드](images/thinq_mate_wordcloud.png)
+![유튜브 댓글 유형 파이차트](images/thinq_mate_painpoints_pie.png)
+
 ### 4) Performance Trackers — 목표 KPI 설계 (※ 실제 달성 성과 아님, 기획 단계에서 설계한 목표 지표)
 사용자 활동 / 디지털 적응 및 신기능 사용 / 커뮤니티·콘텐츠 성과 / 브랜드 충성도 및 정서적 가치, 4개 카테고리로 성과 측정 지표 설계
 
@@ -40,7 +43,12 @@ LG ThinQ의 낮은 재방문율 문제를 데이터로 입증하고, 중장년�
  ├─ requirements.txt
  ├─ 82cook_crawling.py            # 커뮤니티 게시글 크롤링 + 워드클라우드
  ├─ youtube_comment_crawling.py   # 유튜브 댓글 크롤링 + 유형분류 + 파이차트
- └─ playstore_review_crawling.py  # 앱 리뷰 크롤링 + 부정키워드분석 + 워드클라우드
+ ├─ playstore_review_crawling.py  # 앱 리뷰 크롤링 + 부정키워드분석 + 워드클라우드
+ ├─ data/
+ │   └─ README.md                 # 데이터 출처·컬럼 설명
+ └─ images/
+     ├─ thinq_mate_wordcloud.png      # 82쿡 워드클라우드
+     └─ thinq_mate_painpoints_pie.png # 유튜브 댓글 유형 파이차트
 ```
 
 ## ▶️ 실행 방법
