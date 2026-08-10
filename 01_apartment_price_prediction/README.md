@@ -40,6 +40,9 @@
 | 검증 데이터 MAE (보팅 앙상블) | **11,552** |
 | 최종 순위 | 2위 / 16팀 |
 
+![검증-테스트 MAE 괴리](images/apartment_overfit_gap.png)
+![하이퍼파라미터 튜닝 전후 MAE 개선](images/apartment_mae_progress.png)
+
 **예측 결과 예시** (`voting_ensemble.csv`)
 
 | id | transaction_real_price |
@@ -54,7 +57,12 @@
 01_apartment_price_prediction/
  ├─ README.md
  ├─ requirements.txt
- └─ apartment_price_prediction.py   # 전처리 ~ 모델링 ~ 예측 전체 파이프라인
+ ├─ apartment_price_prediction.py   # 전처리 ~ 모델링 ~ 예측 전체 파이프라인
+ ├─ data/
+ │   └─ README.md                  # 데이터 출처·컬럼 설명
+ └─ images/
+     ├─ apartment_overfit_gap.png  # 검증-테스트 MAE 괴리(과적합) 시각화
+     └─ apartment_mae_progress.png # 튜닝 전후 MAE 개선 그래프
 ```
 
 ## ▶️ 실행 방법
