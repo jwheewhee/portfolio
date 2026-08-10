@@ -1,0 +1,10 @@
+selenium
+beautifulsoup4
+pandas
+openpyxl
+tqdm
+kiwipiepy
+konlpy
+scikit-learn
+gensim
+adjustText
