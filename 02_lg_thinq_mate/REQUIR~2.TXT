@@ -1,0 +1,7 @@
+selenium
+tqdm
+pandas
+google-play-scraper
+konlpy
+wordcloud
+matplotlib
