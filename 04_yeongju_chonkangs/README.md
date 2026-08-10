@@ -34,6 +34,9 @@
 ## 🏆 최종 결과
 19개 읍면동의 종합 점수를 산출해 최종 후보 3곳을 선정했습니다.
 
+![Folium 최종 결과 지도](images/chonkangs_geojson_map.png)
+![읍면동별 종합 점수](images/chonkangs_result_v2.jpg)
+
 | 순위 | 읍면동 | 종합 점수 |
 |---|---|---|
 | 1 | 문수면 | 1.000 |
@@ -50,7 +53,12 @@
  ├─ README.md
  ├─ requirements.txt
  ├─ .env.example
- └─ chonkangs_location_analysis.py     # 전처리~거리계산~스코어링~GeoJSON 결과지도 전체 파이프라인
+ ├─ chonkangs_location_analysis.py     # 전처리~거리계산~스코어링~GeoJSON 결과지도 전체 파이프라인
+ ├─ data/
+ │   └─ README.md                     # 데이터 출처·컬럼 설명
+ └─ images/
+     ├─ chonkangs_geojson_map.png     # Folium 최종 결과 지도
+     └─ chonkangs_result_v2.jpg       # 읍면동별 종합 점수 막대그래프
 ```
 
 ## ▶️ 실행 방법 (분석 코드)
