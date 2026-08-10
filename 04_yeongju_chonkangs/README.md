@@ -35,7 +35,7 @@
 19개 읍면동의 종합 점수를 산출해 최종 후보 3곳을 선정했습니다.
 
 ![Folium 최종 결과 지도](images/chonkangs_geojson_map.png)
-![읍면동별 종합 점수](images/chonkangs_result_v2.jpg)
+![읍면동별 종합 점수](images/chonkangs_result.jpg)
 
 | 순위 | 읍면동 | 종합 점수 |
 |---|---|---|
@@ -58,7 +58,7 @@
  │   └─ README.md                     # 데이터 출처·컬럼 설명
  └─ images/
      ├─ chonkangs_geojson_map.png     # Folium 최종 결과 지도
-     └─ chonkangs_result_v2.jpg       # 읍면동별 종합 점수 막대그래프
+     └─ chonkangs_result.jpg       # 읍면동별 종합 점수 막대그래프
 ```
 
 ## ▶️ 실행 방법 (분석 코드)
